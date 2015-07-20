@@ -1,0 +1,201 @@
+(*network data and topological propeties*)
+adjall = "Binary bipartite network data"
+la = Length[adjall]
+sizeBIP =Map[Dimensions, Table[connectedMatrix[ordIteratedNest[adjall[[l]]]], {l, 1, la}]];
+conn = Table[Total[connectedMatrix[adjall[[l]]], 2]/(Times @@ sizeBIP[[l]]), {l,1, la}];
+size = Map[Length, Table[BBA[connectedMatrix[ordIteratedNest[adjall[[l]]]], 0], {l, 1, la}]]
+col = Transpose[Map[Dimensions, Map[connectedMatrix, adjall]]][[2]]
+row = size - col
+
+(*From bipartite binary interaction data to adjecency matrix*)
+BBA[a_List, p_] := Module[{Sx = Dimensions[a][[1]], Sy = Dimensions[a][[2]]}, 
+  Join[Join[Table[If[RandomReal[] < p, -1., 0.], {i, 1, Sx}, {j, 1, Sx}], a, 2],Join[a // Transpose, 
+    Table[If[RandomReal[] < p, -1., 0.], {i, 1, Sy}, {j, 1, Sy}], 2]]]
+
+(*Give only connected part of the network data*)
+connectedMatrix[a_] := 
+ Module[{isnode1 = Position[Total[a], 0.], isnode2, adjW0, adjWC, OrdRow, OrdCol}, 
+  adjW0 = If[Length[isnode1] > 0, Transpose[Delete[Transpose[a], isnode1]], a]; isnode2 = Position[Total[adjW0, {2}], 0.]; 
+  adjWC = If[Length[isnode2] > 0, Delete[adjW0, isnode2], adjW0]]
+
+(*Assignment of species interactions strength*)
+adjW[i_, \[Gamma]0_, \[Delta]_] := Module[{adjbip, k, adj}, 
+  adjbip = connectedMatrix[adjall[[i]]]; 
+  adj = BBA[adjbip, 0]; k = Total[adj, {2}]; 
+  Return[ReplacePart[Table[adj[[j, All]]*(\[Gamma]0/k[[j]]^\[Delta]), {j, 1, Length[adj]}], {l_, l_} :> -1.]]]
+
+(*Perturbations*)
+\[Xi]c[S_, \[Zeta]_] := RandomVariate[NormalDistribution[1, \[Zeta]], S]
+\[Xi]k[k_List, S_, \[Zeta]_] := RandomVariate[NormalDistribution[1, \[Zeta]], S]* Table[2 k[[j]]/Max[k], {j, 1, S}];
+
+(*allocate variables*)
+rmax = 1000;
+result = Table[{}, {r, 1, rmax}];
+resultSingle = Table[{}, {r, 1, rmax}, {l, 1, la}];
+resultAll = Table[{}, {r, 1, rmax}, {l, 1, la}];
+resultAll2 = Table[{}, {r, 1, rmax}, {l, 1, la}];
+
+(*for parallelizations*)
+SetSharedFunction[adjWCM]
+SetSharedVariable[resultAll, resultAll2, resultSingle, result]
+
+(main functions to compute localzations, effect on asymptotic amplitude and correlation with topological network properties)
+LocSingle[\[Gamma]0_, \[Delta]_, \[Sigma]_] := Do[
+  Module[{w, wH, wR, wHR, adjbip, adj, S, k, kran, \[Lambda], \[Lambda]R, u, uR, uM, v, \[Lambda]H, vH, vHM, \[Lambda]HR, vHR, vHMR, vM, vR, vMR, uMR, loc, \[Delta]xk, \[Delta]xkR, \[Delta]x0, \[Delta]x0R, \[Delta]xall, \[Delta]xallR, locR, locL, locRran, locLran, locH, locHran, \[ScriptCapitalA]all, \[ScriptCapitalA]Rall, pop}, 
+    
+    pop = RandomVariate[GammaDistribution[1/\[Sigma], \[Sigma]], size[[l]]];
+    w = adjW[l, \[Gamma]0, \[Delta]]*pop;
+    k = Total[UnitStep[w - 10^-6], {2}];
+    S = Length[w];
+    \[Lambda] = Map[Re, Eigenvalues[w]];
+    v = Eigenvectors[w];
+    u = Eigenvectors[Transpose[w]];
+    
+    uM = Extract[u, Position[\[Lambda], Max[\[Lambda]]]][[1]];
+    vM = Extract[v, Position[\[Lambda], Max[\[Lambda]]]][[1]];
+    wH = N[(w + Transpose[w])/2];
+    \[Lambda]H = Map[Re, Eigenvalues[wH]];
+    vH = Eigenvectors[wH];
+    vHM = Extract[vH, Position[\[Lambda]H, Max[\[Lambda]H]]][[1]];
+    
+    \[Delta]xall = \[Delta]x0 + \[Delta]xk;
+    locR = Total[Flatten[vM]^4];
+    locL = Total[Flatten[uM]^4];
+    locH = Total[Flatten[vHM]^4];
+    ParallelTable[
+     SetDirectory[
+      ".../Randomization/Randomization/" <> ToString[l]];
+     adjbip = Import[ToString[r - 1] <> ".dat"]; 
+     adj = BBA[adjbip, 0];
+     kran = Total[adj, {2}];
+     wR = ReplacePart[Table[adj[[j, All]]*(\[Gamma]0/kran[[j]]^\[Delta]), {j, 1, Length[adj]}], {w_, w_} :> -1.] pop;
+     \[Lambda]R = Map[Re, Eigenvalues[wR]];
+     vR = Eigenvectors[wR];
+     uR = Eigenvectors[Transpose[wR]];
+     uMR = Extract[uR, Position[\[Lambda]R, Max[\[Lambda]R]]][[1]];
+     vMR = Extract[vR, Position[\[Lambda]R, Max[\[Lambda]R]]][[1]];
+     
+     wHR = N[(wR + Transpose[wR])/2];
+     \[Lambda]HR = Map[Re, Eigenvalues[wHR]];
+     vHR = Eigenvectors[wHR];
+     vHMR = Extract[vHR, Position[\[Lambda]HR, Max[\[Lambda]HR]]][[1]];
+     
+     \[Delta]xallR = \[Delta]x0R + \[Delta]xkR;
+     locRran = Total[Flatten[vMR]^4];
+     locLran = Total[Flatten[uMR]^4];
+     locHran = Total[Flatten[vHMR]^4];
+     
+     resultSingle[[r, l]] = {N[locR/locRran], N[locL/locLran], N[locH/locHran], Max[\[Lambda]], Max[\[Lambda]R], Max[\[Lambda]H], N[Total[UnitStep[w - 10^-6], 2]/(2 row[[l]]*col[[l]])],S};
+     , {r, 1, rmax}];];, {l, 1, la}]
+
+(*Null model 1 - randomizations done thorugh Python code*)
+
+Localiz[\[Gamma]_, \[Delta]_, \[Sigma]_] := Do[
+  Module[{\[Gamma]0, w, wH, wR, wHR, adjbip, adj, S, k, kran, \[Lambda], \[Lambda]R, u, uR, uM, v, \[Lambda]H, vH, vHM, \[Lambda]HR, vHR, vHMR, vM, vR, vMR, uMR, loc, \[Delta]xk, \[Delta]xkR, \[Delta]x0, \[Delta]x0R, \[Delta]xall, \[Delta]xallR, locR, locL, locRran, locLran, locH, locHran, \[ScriptCapitalA]all, \[ScriptCapitalA]Rall, pop}, 
+    pop = RandomVariate[GammaDistribution[1/\[Sigma], \[Sigma]], size[[l]]];
+    \[Gamma]0 = \[Gamma] ;
+    w = adjW[l, \[Gamma]0, \[Delta]] pop;
+    k = Total[UnitStep[w - 10^-6], {2}];
+    S = Length[w];
+    \[Lambda] = Map[Re, Eigenvalues[w]];
+    v = Eigenvectors[w];
+    u = Eigenvectors[Transpose[w]];
+    
+    uM = Extract[u, Position[\[Lambda], Max[\[Lambda]]]][[1]];
+    vM = Extract[v, Position[\[Lambda], Max[\[Lambda]]]][[1]];
+    
+    wH = N[(w + Transpose[w])/2];
+    \[Lambda]H = Map[Re, Eigenvalues[wH]];
+    vH = Eigenvectors[wH];
+    vHM = Extract[vH, Position[\[Lambda]H, Max[\[Lambda]H]]][[1]];
+    
+    \[Delta]xk = \[Xi]k[k, S, 0.2];
+    \[Delta]x0 = \[Xi]c[S, 0.2];
+    \[Delta]xall = \[Delta]x0 + \[Delta]xk;
+    \[ScriptCapitalA]all = Abs[(uM.\[Delta]xall)/(uM.vM)];
+    locR = Total[Flatten[vM]^4];
+    locL = Total[Flatten[uM]^4];
+    locH = Total[Flatten[vHM]^4];
+    ParallelTable[
+     SetDirectory[".../Randomization/" <> ToString[l]];
+     adjbip = Import[ToString[r - 1] <> ".dat"]; 
+     adj = BBA[adjbip, 0];
+     kran = Total[adj, {2}];
+     wR = ReplacePart[Table[adj[[j, All]]*(\[Gamma]0/kran[[j]]^\[Delta]), {j, 1, Length[adj]}], {w_, w_} :> -1.] pop;
+     \[Lambda]R = Map[Re, Eigenvalues[wR]];
+     vR = Eigenvectors[wR];
+     uR = Eigenvectors[Transpose[wR]];
+     uMR = Extract[uR, Position[\[Lambda]R, Max[\[Lambda]R]]][[1]];
+     vMR = Extract[vR, Position[\[Lambda]R, Max[\[Lambda]R]]][[1]];
+     
+     wHR = N[(wR + Transpose[wR])/2];
+     \[Lambda]HR = Map[Re, Eigenvalues[wHR]];
+     vHR = Eigenvectors[wHR];
+     vHMR = Extract[vHR, Position[\[Lambda]HR, Max[\[Lambda]HR]]][[1]];
+     
+     \[Delta]x0R = \[Delta]x0;
+     \[Delta]xkR = \[Xi]k[kran, S, 0.2];
+     \[Delta]xallR = \[Delta]x0R + \[Delta]xkR;
+     locRran = Total[Flatten[vMR]^4];
+     locLran = Total[Flatten[uMR]^4];
+     
+     locHran = Total[Flatten[vHMR]^4];
+     \[ScriptCapitalA]Rall = Abs[(uMR.\[Delta]xallR)/(uMR.vMR)];
+     
+     resultAll[[r, l]] = {\[ScriptCapitalA]all, \[ScriptCapitalA]Rall,locR, locRran, locL, locLran, locH, locHran};
+     , {r, 1, rmax}];];, {l, 1, la}]
+
+(*Null model 2 - randomizations done using curve ball algorithm thorugh Python code*)
+LocalizCM[\[Gamma]_, \[Delta]_, \[Sigma]_] := Do[
+Module[{a, \[Gamma]0, w, wH, wR, wHR, adjbip, adj, S, k, kran, \[Lambda], \[Lambda]R, u, uR, uM, v, \[Lambda]H, vH, vHM, \[Lambda]HR, vHR, vHMR, vM, vR, vMR, uMR, loc, \[Delta]xk, \[Delta]xkR, \[Delta]x0, \[Delta]x0R, \[Delta]xall, \[Delta]xallR, locR, locL, locRran, locLran, locH, locHran, \[ScriptCapitalA]all, \[ScriptCapitalA]Rall, pop}, 
+    pop = RandomVariate[GammaDistribution[1/\[Sigma], \[Sigma]], size[[l]]];
+    \[Gamma]0 = \[Gamma] ;
+    w = adjW[l, \[Gamma]0, \[Delta]] pop;
+    k = Total[UnitStep[w - 10^-6], {2}];
+    S = Length[w];
+    \[Lambda] = Map[Re, Eigenvalues[w]];
+    v = Eigenvectors[w];
+    u = Eigenvectors[Transpose[w]];
+    
+    uM = Extract[u, Position[\[Lambda], Max[\[Lambda]]]][[1]];
+    vM = Extract[v, Position[\[Lambda], Max[\[Lambda]]]][[1]];
+    
+    wH = N[(w + Transpose[w])/2];
+    \[Lambda]H = Map[Re, Eigenvalues[wH]];
+    vH = Eigenvectors[wH];
+    vHM = Extract[vH, Position[\[Lambda]H, Max[\[Lambda]H]]][[1]];
+    
+    \[Delta]xk = \[Xi]k[k, S, 0.2];
+    \[Delta]x0 = \[Xi]c[S, 0.2];
+    \[Delta]xall = \[Delta]x0 + \[Delta]xk;
+    \[ScriptCapitalA]all = Abs[(uM.\[Delta]xall)/(uM.vM)];
+    locR = Total[Flatten[vM]^4];
+    locL = Total[Flatten[uM]^4];
+    locH = Total[Flatten[vHM]^4];
+    ParallelTable[SetDirectory["...\Randomization/Rnd_FixDeg/" <> ToString[l]];
+     a = N[Import[ToString[r - 1] <> ".dat", "Data"]];
+     adjbip = connectedMatrix[ordIteratedNest[a]]; 
+     adj = BBA[adjbip, 0.]; kran = (Total[adj, {2}]) /. {0. -> 99};
+     wR = ReplacePart[Table[adj[[j, All]]*(\[Gamma]0/kran[[j]]^\[Delta]), {j, 1, Length[adj]}], {w_, w_} :> -1.] pop;
+     
+     \[Lambda]R = Map[Re, Eigenvalues[wR]];
+     vR = Eigenvectors[wR];
+     uR = Eigenvectors[Transpose[wR]];
+     uMR = Extract[uR, Position[\[Lambda]R, Max[\[Lambda]R]]][[1]];
+     vMR = Extract[vR, Position[\[Lambda]R, Max[\[Lambda]R]]][[1]];
+     
+     wHR = N[(wR + Transpose[wR])/2];
+     \[Lambda]HR = Map[Re, Eigenvalues[wHR]];
+     vHR = Eigenvectors[wHR];
+     vHMR = Extract[vHR, Position[\[Lambda]HR, Max[\[Lambda]HR]]][[1]];
+     
+     \[Delta]x0R = \[Delta]x0;
+     \[Delta]xkR = \[Xi]k[kran, S, 0.2];
+     \[Delta]xallR = \[Delta]x0R + \[Delta]xkR;
+     locRran = Total[Flatten[vMR]^4];
+     locLran = Total[Flatten[uMR]^4];
+     locHran = Total[Flatten[vHMR]^4];
+     \[ScriptCapitalA]Rall = Abs[(uMR.\[Delta]xallR)/(uMR.vMR)];
+     
+     resultAll2[[r,l]] = {\[ScriptCapitalA]all, \[ScriptCapitalA]Rall, locR, locRran, locL, locLran, locH, locHran};
+     , {r, 1, rmax}];];, {l, 1, la}]
